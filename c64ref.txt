@@ -1,0 +1,2554 @@
+PROCESSOR REGISTERS
+-------------------
++---+---+---+----+---+
+| A | Y | X | PC | S |
++---+---+---+----+---+
+  |   |   |    |   |
+  |   |   |    |   Stack pointer, points to the next available location on the stack (8-bit)
+  |   |   |    Program counter, Memory address of currently executing Instruction (16-bit)
+  |   |   Index register, Indirect indexed or absolute indexed addressing modes (8-bit)
+  |   Index register, Indirect indexed or absolute indexed addressing modes (8-bit)
+  Accumulator, Arithmetic and logical operations (8-bit)
+
+A Accumulator
+	The accumulator is the main register for arithmetic and logic operations. Unlike the index registers X and Y, it has a direct connection to the Arithmetic and Logic Unit (ALU). This is why many operations are only available for the accumulator, not the index registers.
+
+Y Index register Y
+	The Y register has the least operations available. On the other hand, only it has the indirect indexed addressing mode that enables access to any memory place without having to use self-modifying code.
+
+X Index register X
+	This is the main register for addressing data with indices. It has a special addressing mode, indexed indirect, which lets you to have a vector table on the zero page.
+
+PC Program Counter
+	This register points the address from which the next instruction byte (opcode or parameter) will be fetched. Unlike other registers, this one is 16 bits in length. The low and high 8-bit halves of the register are called PCL and PCH, respectively. The Program Counter may be read by pushing its value on the stack. This can be done either by jumping to a subroutine or by causing an interrupt.
+
+S Stack pointer
+	The NMOS 65xx processors have 256 bytes of stack memory, ranging from $0100 to $01FF. The S register is a 8-bit offset to the stack page. In other words, whenever anything is being pushed on the stack, it will be stored to the address $0100+S. The Stack pointer can be read and written by transfering its value to or from the index register X (see below) with the TSX and TXS instructions.
+
+PROCESSOR STATUS REGISTER
+-------------------------
+P Processor status
+	This 8-bit register stores the state of the processor. The bits in this register are called flags. Most of the flags have something to do with arithmetic operations. The P register can be read by pushing it on the stack (with PHP or by causing an interrupt). If you only need to read one flag, you can use the branch instructions. Setting the flags is possible by pulling the P register from stack or by using the flag set or clear instructions. 
+
++---+---+---+---+---+---+---+---+
+| 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+| N | V |   | B | D | I | Z | C |
++---+---+---+---+---+---+---+---+
+  |   |       |   |   |   |   |
+  |   |       |   |   |   |   Carry Flag, 0 = False, 1 = True
+  |   |       |   |   |   Zero Flag, 0 = Not zero, 1 = Zero
+  |   |       |   |   IRQ Disable Flag, 0 = Enable, 1 Disable
+  |   |       |   Decimal Mode Flag, 0 = False, 1 = True
+  |   |       Break Command Flag, 0 = No break, 1 = Break
+  |   Overflow Flag, 0 = False, 1 = True
+  Negative Flag, 0 = Positive, 1 = Negative
+
+  Following is a list of the flags, starting from the 8th bit of the P register (bit 7, value $80):
+
+	N Negative flag
+		This flag will be set after any arithmetic operations (when any of the registers A, X or Y is being loaded with a value). Generally, the N flag will be copied from the topmost bit of the register being loaded. Note that TXS (Transfer X to S) is not an arithmetic operation. Also note that the BIT instruction affects the Negative flag just like arithmetic operations. Finally, the Negative flag behaves differently in Decimal operations (see description below).
+
+	V oVerflow flag
+		Like the Negative flag, this flag is intended to be used with 8-bit signed integer numbers. The flag will be affected by addition and subtraction, the instructions PLP, CLV and BIT, and the hardware signal -SO. Note that there is no SEV instruction, even though the MOS engineers loved to use East European abbreviations, like DDR (Deutsche Demokratische Republik vs. Data Direction Register). (The Russian abbreviation for their former trade association COMECON is SEV.) The -SO (Set Overflow) signal is available on some processors, at least the 6502, to set the V flag. This enables response to an I/O activity in equal or less than three clock cycles when using a BVC instruction branching to itself ($50 $FE). The CLV instruction clears the V flag, and the PLP and BIT instructions copy the flag value from the bit 6 of the topmost stack entry or from memory. After a binary addition or subtraction, the V flag will be set on a sign overflow, cleared otherwise. What is a sign overflow?  For instance, if you are trying to add 123 and 45 together, the result (168) does not fit in a 8-bit signed integer (upper limit 127 and lower limit -128). Similarly, adding -123 to -45 causes the overflow, just like subtracting -45 from 123 or 123 from -45 would do. Like the N flag, the V flag will not be set as expected in the Decimal mode. Later in this document is a precise operation description. A common misbelief is that the V flag could only be set by arithmetic operations, not cleared.
+
+	B Break flag
+		This flag is used to distinguish software (BRK) interrupts from hardware interrupts (IRQ or NMI). The B flag is always set except when the P register is being pushed on stack when jumping to an interrupt routine to process only a hardware interrupt. The official NMOS 65xx documentation claims that the BRK instruction could only cause a jump to the IRQ vector ($FFFE). However, if an NMI interrupt occurs while executing a BRK instruction, the processor will jump to the NMI vector ($FFFA), and the P register will be pushed on the stack with the B flag set.
+
+	D Decimal mode flag
+		This flag is used to select the (Binary Coded) Decimal mode for addition and subtraction. In most applications, the flag is zero. The Decimal mode has many oddities, and it operates differently on CMOS processors. See the description of the ADC, SBC and ARR instructions below.
+
+	I Interrupt disable flag
+		This flag can be used to prevent the processor from jumping to the IRQ handler vector ($FFFE) whenever the hardware line -IRQ is active. The flag will be automatically set after taking an interrupt, so that the processor would not keep jumping to the interrupt routine if the -IRQ signal remains low for several clock cycles.
+
+	Z Zero flag
+		The Zero flag will be affected in the same cases than the Negative flag. Generally, it will be set if an arithmetic register is being loaded with the value zero, and cleared otherwise. The flag will behave differently in Decimal operations.
+
+	C Carry flag
+		This flag is used in additions, subtractions, comparisons and bit rotations. In additions and subtractions, it acts as a 9th bit and lets you to chain operations to calculate with bigger than 8-bit numbers. When subtracting, the Carry flag is the negative of Borrow: if an overflow occurs, the flag will be clear, otherwise set. Comparisons are a special case of subtraction: they assume Carry flag set and Decimal flag clear, and do not store the result of the subtraction anywhere. There are four kinds of bit rotations. All of them store the bit that is being rotated off to the Carry flag. The left shifting instructions are ROL and ASL. ROL copies the initial Carry flag to the lowmost bit of the byte; ASL always clears it. Similarly, the ROR and LSR instructions shift to the right.
+
+OPCODES
+-------
+  *  add 1 to cycles if page boundery is crossed
+  ** add 1 to cycles if branch occurs on same page
+     add 2 to cycles if branch occurs to different page
+
+     Legend to Flags:  + .... modified
+                       - .... not modified
+                       1 .... set
+                       0 .... cleared
+                      M6 .... memory bit 6
+                      M7 .... memory bit 7
+
+ADC  Add Memory to Accumulator with Carry
+     A + M + C -> A, C                N Z C I D V
+                                      + + + - - +
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     ADC #oper     69    2     2
+     zeropage      ADC oper      65    2     3
+     zeropage,X    ADC oper,X    75    2     4
+     absolute      ADC oper      6D    3     4
+     absolute,X    ADC oper,X    7D    3     4*
+     absolute,Y    ADC oper,Y    79    3     4*
+     (indirect,X)  ADC (oper,X)  61    2     6
+     (indirect),Y  ADC (oper),Y  71    2     5*
+
+AND  AND Memory with Accumulator
+     A AND M -> A                     N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     AND #oper     29    2     2
+     zeropage      AND oper      25    2     3
+     zeropage,X    AND oper,X    35    2     4
+     absolute      AND oper      2D    3     4
+     absolute,X    AND oper,X    3D    3     4*
+     absolute,Y    AND oper,Y    39    3     4*
+     (indirect,X)  AND (oper,X)  21    2     6
+     (indirect),Y  AND (oper),Y  31    2     5*
+
+ASL  Shift Left One Bit (Memory or Accumulator)
+     C <- [76543210] <- 0             N Z C I D V
+                                      + + + - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     accumulator   ASL A         0A    1     2
+     zeropage      ASL oper      06    2     5
+     zeropage,X    ASL oper,X    16    2     6
+     absolute      ASL oper      0E    3     6
+     absolute,X    ASL oper,X    1E    3     7
+
+BCC  Branch on Carry Clear
+     branch on C = 0                  N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     relative      BCC oper      90    2     2**
+
+BCS  Branch on Carry Set
+     branch on C = 1                  N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     relative      BCS oper      B0    2     2**
+
+BEQ  Branch on Result Zero
+     branch on Z = 1                  N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     relative      BEQ oper      F0    2     2**
+
+BIT  Test Bits in Memory with Accumulator
+     bits 7 and 6 of operand are transfered to bit 7 and 6 of SR (N,V);
+     the zeroflag is set to the result of operand AND accumulator.
+
+     A AND M, M7 -> N, M6 -> V        N Z C I D V
+                                     M7 + - - - M6
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     zeropage      BIT oper      24    2     3
+     absolute      BIT oper      2C    3     4
+
+BMI  Branch on Result Minus
+     branch on N = 1                  N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     relative      BMI oper      30    2     2**
+
+BNE  Branch on Result not Zero
+     branch on Z = 0                  N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     relative      BNE oper      D0    2     2**
+
+BPL  Branch on Result Plus
+     branch on N = 0                  N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     relative      BPL oper      10    2     2**
+
+BRK  Force Break
+     interrupt,                       N Z C I D V
+     push PC+2, push SR               - - - 1 - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       BRK           00    1     7
+
+BVC  Branch on Overflow Clear
+     branch on V = 0                  N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     relative      BVC oper      50    2     2**
+
+BVS  Branch on Overflow Set
+     branch on V = 1                  N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     relative      BVC oper      70    2     2**
+
+CLC  Clear Carry Flag
+     0 -> C                           N Z C I D V
+                                      - - 0 - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       CLC           18    1     2
+
+CLD  Clear Decimal Mode
+     0 -> D                           N Z C I D V
+                                      - - - - 0 -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       CLD           D8    1     2
+
+CLI  Clear Interrupt Disable Bit
+     0 -> I                           N Z C I D V
+                                      - - - 0 - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       CLI           58    1     2
+
+CLV  Clear Overflow Flag
+     0 -> V                           N Z C I D V
+                                      - - - - - 0
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       CLV           B8    1     2
+
+CMP  Compare Memory with Accumulator
+     A - M                            N Z C I D V
+                                      + + + - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     CMP #oper     C9    2     2
+     zeropage      CMP oper      C5    2     3
+     zeropage,X    CMP oper,X    D5    2     4
+     absolute      CMP oper      CD    3     4
+     absolute,X    CMP oper,X    DD    3     4*
+     absolute,Y    CMP oper,Y    D9    3     4*
+     (indirect,X)  CMP (oper,X)  C1    2     6
+     (indirect),Y  CMP (oper),Y  D1    2     5*
+
+CPX  Compare Memory and Index X
+     X - M                            N Z C I D V
+                                      + + + - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     CPX #oper     E0    2     2
+     zeropage      CPX oper      E4    2     3
+     absolute      CPX oper      EC    3     4
+
+CPY  Compare Memory and Index Y
+     Y - M                            N Z C I D V
+                                      + + + - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     CPY #oper     C0    2     2
+     zeropage      CPY oper      C4    2     3
+     absolute      CPY oper      CC    3     4
+
+DEC  Decrement Memory by One
+     M - 1 -> M                       N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     zeropage      DEC oper      C6    2     5
+     zeropage,X    DEC oper,X    D6    2     6
+     absolute      DEC oper      CE    3     6
+     absolute,X    DEC oper,X    DE    3     7
+
+DEX  Decrement Index X by One
+     X - 1 -> X                       N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       DEC           CA    1     2
+
+DEY  Decrement Index Y by One
+     Y - 1 -> Y                       N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       DEC           88    1     2
+
+EOR  Exclusive-OR Memory with Accumulator
+     A EOR M -> A                     N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     EOR #oper     49    2     2
+     zeropage      EOR oper      45    2     3
+     zeropage,X    EOR oper,X    55    2     4
+     absolute      EOR oper      4D    3     4
+     absolute,X    EOR oper,X    5D    3     4*
+     absolute,Y    EOR oper,Y    59    3     4*
+     (indirect,X)  EOR (oper,X)  41    2     6
+     (indirect),Y  EOR (oper),Y  51    2     5*
+
+INC  Increment Memory by One
+     M + 1 -> M                       N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     zeropage      INC oper      E6    2     5
+     zeropage,X    INC oper,X    F6    2     6
+     absolute      INC oper      EE    3     6
+     absolute,X    INC oper,X    FE    3     7
+
+INX  Increment Index X by One
+     X + 1 -> X                       N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       INX           E8    1     2
+
+INY  Increment Index Y by One
+     Y + 1 -> Y                       N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       INY           C8    1     2
+
+JMP  Jump to New Location
+     (PC+1) -> PCL                    N Z C I D V
+     (PC+2) -> PCH                    - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     absolute      JMP oper      4C    3     3
+     indirect      JMP (oper)    6C    3     5
+
+JSR  Jump to New Location Saving Return Address
+     push (PC+2),                     N Z C I D V
+     (PC+1) -> PCL                    - - - - - -
+     (PC+2) -> PCH
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     absolute      JSR oper      20    3     6
+
+LDA  Load Accumulator with Memory
+     M -> A                           N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     LDA #oper     A9    2     2
+     zeropage      LDA oper      A5    2     3
+     zeropage,X    LDA oper,X    B5    2     4
+     absolute      LDA oper      AD    3     4
+     absolute,X    LDA oper,X    BD    3     4*
+     absolute,Y    LDA oper,Y    B9    3     4*
+     (indirect,X)  LDA (oper,X)  A1    2     6
+     (indirect),Y  LDA (oper),Y  B1    2     5*
+
+LDX  Load Index X with Memory
+     M -> X                           N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     LDX #oper     A2    2     2
+     zeropage      LDX oper      A6    2     3
+     zeropage,Y    LDX oper,Y    B6    2     4
+     absolute      LDX oper      AE    3     4
+     absolute,Y    LDX oper,Y    BE    3     4*
+
+LDY  Load Index Y with Memory
+     M -> Y                           N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     LDY #oper     A0    2     2
+     zeropage      LDY oper      A4    2     3
+     zeropage,X    LDY oper,X    B4    2     4
+     absolute      LDY oper      AC    3     4
+     absolute,X    LDY oper,X    BC    3     4*
+
+LSR  Shift One Bit Right (Memory or Accumulator)
+     0 -> [76543210] -> C             N Z C I D V
+                                      0 + + - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     accumulator   LSR A         4A    1     2
+     zeropage      LSR oper      46    2     5
+     zeropage,X    LSR oper,X    56    2     6
+     absolute      LSR oper      4E    3     6
+     absolute,X    LSR oper,X    5E    3     7
+
+NOP  No Operation
+     ---                              N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       NOP           EA    1     2
+
+ORA  OR Memory with Accumulator
+     A OR M -> A                      N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     ORA #oper     09    2     2
+     zeropage      ORA oper      05    2     3
+     zeropage,X    ORA oper,X    15    2     4
+     absolute      ORA oper      0D    3     4
+     absolute,X    ORA oper,X    1D    3     4*
+     absolute,Y    ORA oper,Y    19    3     4*
+     (indirect,X)  ORA (oper,X)  01    2     6
+     (indirect),Y  ORA (oper),Y  11    2     5*
+
+PHA  Push Accumulator on Stack
+     push A                           N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       PHA           48    1     3
+
+PHP  Push Processor Status on Stack
+     push SR                          N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       PHP           08    1     3
+
+PLA  Pull Accumulator from Stack
+     pull A                           N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       PLA           68    1     4
+
+PLP  Pull Processor Status from Stack
+     pull SR                          N Z C I D V
+                                      from stack
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       PLP           28    1     4
+
+ROL  Rotate One Bit Left (Memory or Accumulator)
+     C <- [76543210] <- C             N Z C I D V
+                                      + + + - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     accumulator   ROL A         2A    1     2
+     zeropage      ROL oper      26    2     5
+     zeropage,X    ROL oper,X    36    2     6
+     absolute      ROL oper      2E    3     6
+     absolute,X    ROL oper,X    3E    3     7
+
+ROR  Rotate One Bit Right (Memory or Accumulator)
+     C -> [76543210] -> C             N Z C I D V
+                                      + + + - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     accumulator   ROR A         6A    1     2
+     zeropage      ROR oper      66    2     5
+     zeropage,X    ROR oper,X    76    2     6
+     absolute      ROR oper      6E    3     6
+     absolute,X    ROR oper,X    7E    3     7
+
+RTI  Return from Interrupt
+     pull SR, pull PC                 N Z C I D V
+                                      from stack
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       RTI           40    1     6
+
+RTS  Return from Subroutine
+     pull PC, PC+1 -> PC              N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       RTS           60    1     6
+
+SBC  Subtract Memory from Accumulator with Borrow
+     A - M - C -> A                   N Z C I D V
+                                      + + + - - +
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     immidiate     SBC #oper     E9    2     2
+     zeropage      SBC oper      E5    2     3
+     zeropage,X    SBC oper,X    F5    2     4
+     absolute      SBC oper      ED    3     4
+     absolute,X    SBC oper,X    FD    3     4*
+     absolute,Y    SBC oper,Y    F9    3     4*
+     (indirect,X)  SBC (oper,X)  E1    2     6
+     (indirect),Y  SBC (oper),Y  F1    2     5*
+
+SEC  Set Carry Flag
+     1 -> C                           N Z C I D V
+                                      - - 1 - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       SEC           38    1     2
+
+SED  Set Decimal Flag
+     1 -> D                           N Z C I D V
+                                      - - - - 1 -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       SED           F8    1     2
+
+SEI  Set Interrupt Disable Status
+     1 -> I                           N Z C I D V
+                                      - - - 1 - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       SEI           78    1     2
+
+STA  Store Accumulator in Memory
+     A -> M                           N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     zeropage      STA oper      85    2     3
+     zeropage,X    STA oper,X    95    2     4
+     absolute      STA oper      8D    3     4
+     absolute,X    STA oper,X    9D    3     5
+     absolute,Y    STA oper,Y    99    3     5
+     (indirect,X)  STA (oper,X)  81    2     6
+     (indirect),Y  STA (oper),Y  91    2     6
+
+STX  Store Index X in Memory
+     X -> M                           N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     zeropage      STX oper      86    2     3
+     zeropage,Y    STX oper,Y    96    2     4
+     absolute      STX oper      8E    3     4
+
+STY  Store Index Y in Memory
+     Y -> M                           N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     zeropage      STY oper      84    2     3
+     zeropage,X    STY oper,X    94    2     4
+     absolute      STY oper      8C    3     4
+
+TAX  Transfer Accumulator to Index X
+     A -> X                           N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       TAX           AA    1     2
+
+TAY  Transfer Accumulator to Index Y
+     A -> Y                           N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       TAY           A8    1     2
+
+TSX  Transfer Stack Pointer to Index X
+     SP -> X                          N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       TSX           BA    1     2
+
+TXA  Transfer Index X to Accumulator
+     X -> A                           N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       TXA           8A    1     2
+
+TXS  Transfer Index X to Stack Register
+     X -> SP                          N Z C I D V
+                                      - - - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       TXS           9A    1     2
+
+TYA  Transfer Index Y to Accumulator
+     Y -> A                           N Z C I D V
+                                      + + - - - -
+     addressing    assembler    opc  bytes  cyles
+     --------------------------------------------
+     implied       TYA           98    1     2
+
+ADDRESSING MODES
+----------------
+Implied addressing
+INC
+1 byte
+
+Accumulator addressing
+ASL
+1 byte
+
+Immediate addressing
+LDA #64
+2 bytes
+
+Absolute addressing
+LDA $1000
+STA $2000
+3 bytes
+
+Indexed absolute addressing
+LDX #01
+STA $1000,x
+
+Zeropage addressing
+LDA $10
+STA $20
+2 bytes
+
+Indexed zeropage addressing
+LDX #$01
+STA $10,x
+
+Relative addressing
+BEQ Next
+
+Absolute-indirect addressing
+JMP ($F000)
+
+Indexed-indirect addressing
+$10 = #$00
+$11 = #$50
+LDX #$05
+LDA ($05,X)
+Result = #$5000
+
+Indirect-indexed addressing
+$10 = #$00
+$11 = #$50
+LDY #$01
+LDA ($10,Y)
+Result = #$5001
+
+BIT-WISE BOOLEANS
+-----------------
+AND
+0 0 = 0
+0 1 = 0
+1 0 = 0
+1 1 = 1
+
+lda 10011001
+and 10101010
+--------
+10001000
+
+ORA
+0 0 = 0
+0 1 = 1
+1 0 = 1
+1 1 = 1
+
+lda 10011001
+ora 10101010
+--------
+10111011
+
+EOR
+0 0	= 0
+0 1	= 1
+1 0	= 1
+1 1	= 0
+
+lda 10011001
+eor 10101010
+--------
+00110011
+
+SPRITE DATA FORMAT
+------------------
+64 bytes (24*21 pixels) (21 rows * 3 bytes)
+
+SPRITE POINTERS
+---------------
+Sprite pointers are located at $07f8-$07ff (one for each sprite). If sprites data is located at for example $3e00, pointer value is $3e00 / 64 = $f8.
+
+LDA #$f8
+STA $07f8 (pointer for sprite 0 points at $3e00)
+
+KOALA IMAGE DATA FORMAT
+-----------------------
+2 bytes		Load address
+8000 bytes	Bitmap data
+1000 bytes	Character data
+1000 bytes	Color data
+
+COLORS
+------
+0 Black
+1 White
+2 Red
+3 Cyan
+4 Purple
+5 Green
+6 Blue
+7 Yellow
+8 Orange
+9 Brown
+a Light red
+b Darkest grey
+c Dark grey
+d Light green
+e Light blue
+f Light grey
+
+SCREEN RAM
+----------
+     01   02   03   04   05   06   07   08   09   10   11   12   13   14   15   16   17   18   19   20   21   22   23   24   25   26   27   28   29   30   31   32   33   34   35   36   37   38   39   40
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+01 |0400|0401|0402|0403|0404|0405|0406|0407|0408|0409|040a|040b|040c|040d|040e|040f|0410|0411|0412|0413|0414|0415|0416|0417|0418|0419|041a|041b|041c|041d|041e|041f|0420|0421|0422|0423|0424|0425|0426|0427|
+02 |0428|0429|042a|042b|042c|042d|042e|042f|0430|0431|0432|0433|0434|0435|0436|0437|0438|0439|043a|043b|043c|043d|043e|043f|0440|0441|0442|0443|0444|0445|0446|0447|0448|0449|044a|044b|044c|044d|044e|044f|
+03 |0450|0451|0452|0453|0454|0455|0456|0457|0458|0459|045a|045b|045c|045d|045e|045f|0460|0461|0462|0463|0464|0465|0466|0467|0468|0469|046a|046b|046c|046d|046e|046f|0470|0471|0472|0473|0474|0475|0476|0477|
+04 |0478|0479|047a|047b|047c|047d|047e|047f|0480|0481|0482|0483|0484|0485|0486|0487|0488|0489|048a|048b|048c|048d|048e|048f|0490|0491|0492|0493|0494|0495|0496|0497|0498|0499|049a|049b|049c|049d|049e|049f|
+05 |04a0|04a1|04a2|04a3|04a4|04a5|04a6|04a7|04a8|04a9|04aa|04ab|04ac|04ad|04ae|04af|04b0|04b1|04b2|04b3|04b4|04b5|04b6|04b7|04b8|04b9|04ba|04bb|04bc|04bd|04be|04bf|04c0|04c1|04c2|04c3|04c4|04c5|04c6|04c7|
+06 |04c8|04c9|04ca|04cb|04cc|04cd|04ce|04cf|04d0|04d1|04d2|04d3|04d4|04d5|04d6|04d7|04d8|04d9|04da|04db|04dc|04dd|04de|04df|04e0|04e1|04e2|04e3|04e4|04e5|04e6|04e7|04e8|04e9|04ea|04eb|04ec|04ed|04ee|04ef|
+07 |04f0|04f1|04f2|04f3|04f4|04f5|04f6|04f7|04f8|04f9|04fa|04fb|04fc|04fd|04fe|04ff|0500|0501|0502|0503|0504|0505|0506|0507|0508|0509|050a|050b|050c|050d|050e|050f|0510|0511|0512|0513|0514|0515|0516|0517|
+08 |0518|0519|051a|051b|051c|051d|051e|051f|0520|0521|0522|0523|0524|0525|0526|0527|0528|0529|052a|052b|052c|052d|052e|052f|0530|0531|0532|0533|0534|0535|0536|0537|0538|0539|053a|053b|053c|053d|053e|053f|
+09 |0540|0541|0542|0543|0544|0545|0546|0547|0548|0549|054a|054b|054c|054d|054e|054f|0550|0551|0552|0553|0554|0555|0556|0557|0558|0559|055a|055b|055c|055d|055e|055f|0560|0561|0562|0563|0564|0565|0566|0567|
+10 |0568|0569|056a|056b|056c|056d|056e|056f|0570|0571|0572|0573|0574|0575|0576|0577|0578|0579|057a|057b|057c|057d|057e|057f|0580|0581|0582|0583|0584|0585|0586|0587|0588|0589|058a|058b|058c|058d|058e|058f|
+11 |0590|0591|0592|0593|0594|0595|0596|0597|0598|0599|059a|059b|059c|059d|059e|059f|05a0|05a1|05a2|05a3|05a4|05a5|05a6|05a7|05a8|05a9|05aa|05ab|05ac|05ad|05ae|05af|05b0|05b1|05b2|05b3|05b4|05b5|05b6|05b7|
+12 |05b8|05b9|05ba|05bb|05bc|05bd|05be|05bf|05c0|05c1|05c2|05c3|05c4|05c5|05c6|05c7|05c8|05c9|05ca|05cb|05cc|05cd|05ce|05cf|05d0|05d1|05d2|05d3|05d4|05d5|05d6|05d7|05d8|05d9|05da|05db|05dc|05dd|05de|05df|
+13 |05e0|05e1|05e2|05e3|05e4|05e5|05e6|05e7|05e8|05e9|05ea|05eb|05ec|05ed|05ee|05ef|05f0|05f1|05f2|05f3|05f4|05f5|05f6|05f7|05f8|05f9|05fa|05fb|05fc|05fd|05fe|05ff|0600|0601|0602|0603|0604|0605|0606|0607|
+14 |0608|0609|060a|060b|060c|060d|060e|060f|0610|0611|0612|0613|0614|0615|0616|0617|0618|0619|061a|061b|061c|061d|061e|061f|0620|0621|0622|0623|0624|0625|0626|0627|0628|0629|062a|062b|062c|062d|062e|062f|
+15 |0630|0631|0632|0633|0634|0635|0636|0637|0638|0639|063a|063b|063c|063d|063e|063f|0640|0641|0642|0643|0644|0645|0646|0647|0648|0649|064a|064b|064c|064d|064e|064f|0650|0651|0652|0653|0654|0655|0656|0657|
+16 |0658|0659|065a|065b|065c|065d|065e|065f|0660|0661|0662|0663|0664|0665|0666|0667|0668|0669|066a|066b|066c|066d|066e|066f|0670|0671|0672|0673|0674|0675|0676|0677|0678|0679|067a|067b|067c|067d|067e|067f|
+17 |0680|0681|0682|0683|0684|0685|0686|0687|0688|0689|068a|068b|068c|068d|068e|068f|0690|0691|0692|0693|0694|0695|0696|0697|0698|0699|069a|069b|069c|069d|069e|069f|06a0|06a1|06a2|06a3|06a4|06a5|06a6|06a7|
+18 |06a8|06a9|06aa|06ab|06ac|06ad|06ae|06af|06b0|06b1|06b2|06b3|06b4|06b5|06b6|06b7|06b8|06b9|06ba|06bb|06bc|06bd|06be|06bf|06c0|06c1|06c2|06c3|06c4|06c5|06c6|06c7|06c8|06c9|06ca|06cb|06cc|06cd|06ce|06cf|
+19 |06d0|06d1|06d2|06d3|06d4|06d5|06d6|06d7|06d8|06d9|06da|06db|06dc|06dd|06de|06df|06e0|06e1|06e2|06e3|06e4|06e5|06e6|06e7|06e8|06e9|06ea|06eb|06ec|06ed|06ee|06ef|06f0|06f1|06f2|06f3|06f4|06f5|06f6|06f7|
+20 |06f8|06f9|06fa|06fb|06fc|06fd|06fe|06ff|0700|0701|0702|0703|0704|0705|0706|0707|0708|0709|070a|070b|070c|070d|070e|070f|0710|0711|0712|0713|0714|0715|0716|0717|0718|0719|071a|071b|071c|071d|071e|071f|
+21 |0720|0721|0722|0723|0724|0725|0726|0727|0728|0729|072a|072b|072c|072d|072e|072f|0730|0731|0732|0733|0734|0735|0736|0737|0738|0739|073a|073b|073c|073d|073e|073f|0740|0741|0742|0743|0744|0745|0746|0747|
+22 |0748|0749|074a|074b|074c|074d|074e|074f|0750|0751|0752|0753|0754|0755|0756|0757|0758|0759|075a|075b|075c|075d|075e|075f|0760|0761|0762|0763|0764|0765|0766|0767|0768|0769|076a|076b|076c|076d|076e|076f|
+23 |0770|0771|0772|0773|0774|0775|0776|0777|0778|0779|077a|077b|077c|077d|077e|077f|0780|0781|0782|0783|0784|0785|0786|0787|0788|0789|078a|078b|078c|078d|078e|078f|0790|0791|0792|0793|0794|0795|0796|0797|
+24 |0798|0799|079a|079b|079c|079d|079e|079f|07a0|07a1|07a2|07a3|07a4|07a5|07a6|07a7|07a8|07a9|07aa|07ab|07ac|07ad|07ae|07af|07b0|07b1|07b2|07b3|07b4|07b5|07b6|07b7|07b8|07b9|07ba|07bb|07bc|07bd|07be|07bf|
+25 |07c0|07c1|07c2|07c3|07c4|07c5|07c6|07c7|07c8|07c9|07ca|07cb|07cc|07cd|07ce|07cf|07d0|07d1|07d2|07d3|07d4|07d5|07d6|07d7|07d8|07d9|07da|07db|07dc|07dd|07de|07df|07e0|07e1|07e2|07e3|07e4|07e5|07e6|07e7|
+   +-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+RAM SUMMARY
+-----------
+$0000-$00FF Page 0			Zeropage addressing
+$0100-$01FF Page 1			Enhanced Zeropage contains the stack
+$0200-$02FF Page 2			Operating System and BASIC pointers
+$0300-$03FF Page 3			Operating System and BASIC pointers
+$0400-$07FF Page 4-7		Screen Memory
+$0800-$9FFF Page 8-159		Free BASIC program storage area (38911 bytes)
+$A000-$BFFF Page 160-191	Free machine language program storage area (when switched-out with ROM)
+$C000-$CFFF Page 192-207	Free machine language program storage area
+$D000-$D3FF Page 208-211
+$D400-$D7FF Page 212-215
+$D800-$DBFF Page 216-219
+$DC00-$DCFF Page 220
+$DD00-$DDFF Page 221
+$DE00-$DFFF Page 222-223	Reserved for interface extensions
+$E000-$FFFF Page 224-255	Free machine language program storage area (when switched-out with ROM)
+
+ROM SUMMARY
+-----------
+$8000-$9FFF Page 128-159	Cartridge ROM (low)
+$A000-$BFFF Page 160-191	BASIC interpretor ROM or cartridge ROM (high)
+$D000-$DFFF Page 208-223	Character generator ROM
+$E000-$FFFF Page 224-255	KERNAL ROM or cartridge ROM (high)
+
+I/O Table
+---------
+$0000-$0001					CPU I/O port
+$D000-$D3FF Page 208-211	VIC-II registers
+$D400-$D7FF Page 212-215	SID registers
+$D800-$DBFF Page 216-219	Color Memory
+$DC00-$DCFF Page 220		CIA 1
+$DD00-$DDFF Page 221		CIA 2
+$DE00-$DEFF Page 222		I/O 1
+$DF00-$DFFF Page 223		I/O 2
+
+MEMORY MAP
+----------
+$0000  
+Processor port data direction register. Bits:
+*   Bit #x: 0 = Bit #x in processor port can only be read; 1 = Bit #x in processor port can be read and written.
+Default: $2F, %00101111.
+
+$0001  
+Processor port. Bits:
+*   Bits #0-#2: Configuration for memory areas $A000-$BFFF, $D000-$DFFF and $E000-$FFFF. Values:
+    *   %x00: RAM visible in all three areas.
+    *   %x01: RAM visible at $A000-$BFFF and $E000-$FFFF.
+    *   %x10: RAM visible at $A000-$BFFF; KERNAL ROM visible at $E000-$FFFF.
+    *   %x11: BASIC ROM visible at $A000-$BFFF; KERNAL ROM visible at $E000-$FFFF.
+    *   %0xx: Character ROM visible at $D000-$DFFF. (Except for the value %000, see above.)
+    *   %1xx: I/O area visible at $D000-$DFFF. (Except for the value %100, see above.)
+*   Bit #3: Datasette output signal level.
+*   Bit #4: Datasette button status; 0 = One or more of PLAY, RECORD, F.FWD or REW pressed; 1 = No button is pressed.
+*   Bit #5: Datasette motor control; 0 = On; 1 = Off.
+Default: $37, %00110111.
+
+$0002  
+Unused.
+
+$0003-$0004  
+Unused.  
+Default: $B1AA, execution address of routine converting floating point to integer.
+
+$0005-$0006  
+Unused.  
+Default: $B391, execution address of routine converting integer to floating point.
+
+$0007  
+Byte being search for during various operations.  
+Current digit of number being input.  
+Low byte of first integer operand during AND and OR.  
+Low byte of integer-format FAC during INT().
+
+$0008  
+Byte being search for during various operations.  
+Current byte of BASIC line during tokenization.  
+High byte of first integer operand during AND and OR.
+
+$0009  
+Current column number during SPC() and TAB().
+
+$000A  
+LOAD/VERIFY switch. Values:
+*   $00: LOAD.
+*   $01-$FF: VERIFY.
+
+$000B  
+Current token during tokenization.  
+Length of BASIC line during insertion of line.  
+AND/OR switch; $00 = AND; $FF = OR.  
+Number of dimensions during array operations.
+
+$000C  
+Switch for array operations. Values:
+*   $00: Operation was not called by DIM.
+*   $40-$7F: Operation was called by DIM.
+
+$000D  
+Current expression type. Values:
+*   $00: Numerical.
+*   $FF: String.
+
+$000E  
+Current numerical expression type. Bits:
+*   Bit #7: 0 = Floating point; 1 = Integer.
+
+$000F  
+Quotation mode switch during tokenization; Bit #6: 0 = Normal mode; 1 = Quotation mode.  
+Quotation mode switch during LIST; $01 = Normal mode; $FE = Quotation mode.  
+Garbage collection indicator during memory allocation for string variable; $00-$7F = There was no garbage collection yet; $80 = Garbage collection already took place.
+
+$0010  
+Switch during fetch of variable name. Values:
+*   $00: Integer variables are accepted.
+*   $01-$FF: Integer variables are not accepted.
+
+$0011  
+GET/INPUT/READ switch. Values:
+*   $00: INPUT.
+*   $40: GET.
+*   $98: READ.
+
+$0012  
+Sign during SIN() and TAN(). Values:
+*   $00: Positive.
+*   $FF: Negative.
+
+$0013  
+Current I/O device number.  
+Default: $00, keyboard for input and screen for output.
+
+$0014-$0015  
+Line number during GOSUB, GOTO and RUN.  
+Second line number during LIST.  
+Memory address during PEEK, POKE, SYS and WAIT.
+
+$0016  
+Pointer to next expression in string stack. Values: $19; $1C; $1F; $22.  
+Default: $19.
+
+$0017-$0018  
+Pointer to previous expression in string stack.
+
+$0019-$0021  
+String stack, temporary area for processing string expressions (9 bytes, 3 entries).
+
+$0022-$0025  
+Temporary area for various operations (4 bytes).
+
+$0026-$0029  
+Auxiliary arithmetical register for division and multiplication (4 bytes).
+
+$002A  
+Unused.
+
+$002B-$002C  
+Pointer to beginning of BASIC area.  
+Default: $0801, 2049.
+
+$002D-$002E  
+Pointer to beginning of variable area. (End of program plus 1.)
+
+$002F-$0030  
+Pointer to beginning of array variable area.
+
+$0031-$0032  
+Pointer to end of array variable area.
+
+$0033-$0034  
+Pointer to beginning of string variable area. (Grows downwards from end of BASIC area.)
+
+$0035-$0036  
+Pointer to memory allocated for current string variable.
+
+$0037-$0038  
+Pointer to end of BASIC area.  
+Default: $A000, 40960.
+
+$0039-$003A  
+Current BASIC line number. Values:
+*   $0000-$F9FF, 0-63999: Line number.
+*   $FF00-$FFFF: Direct mode, no BASIC program is being executed.
+
+$003B-$003C  
+Current BASIC line number for CONT.
+
+$003D-$003E  
+Pointer to next BASIC instruction for CONT. Values:
+*   $0000-$00FF: CONT'ing is not possible.
+*   $0100-$FFFF: Pointer to next BASIC instruction.
+
+$003F-$0040  
+BASIC line number of current DATA item for READ.
+
+$0041-$0042  
+Pointer to next DATA item for READ.
+
+$0043-$0044  
+Pointer to input result during GET, INPUT and READ.
+
+$0045-$0046  
+Name and type of current variable. Bits:
+*   $0045 bits #0-#6: First character of variable name.
+*   $0046 bits #0-#6: Second character of variable name; $00 = Variable name consists of only one character.
+*   $0045 bit #7 and $0046 bit #7:
+    *   %00: Floating-point variable.
+    *   %01: String variable.
+    *   %10: FN function, created with DEF FN.
+    *   %11: Integer variable.
+
+$0047-$0048  
+Pointer to value of current variable or FN function.
+
+$0049-$004A  
+Pointer to value of current variable during LET.  
+Value of second and third parameter during WAIT.  
+Logical number and device number during OPEN.  
+$0049, 73: Logical number of CLOSE.  
+Device number of LOAD, SAVE and VERIFY.
+
+$004B-$004C  
+Temporary area for saving original pointer to current BASIC instruction during GET, INPUT and READ.
+
+$004D  
+Comparison operator indicator. Bits:
+*   Bit #1: 1 = ">" (greater than) is present in expression.
+*   Bit #2: 1 = "=" (equal to) is present in expression.
+*   Bit #3: 1 = "<" (less than) is present in expression.
+
+$004E-$004F  
+Pointer to current FN function.
+
+$0050-$0051  
+Pointer to current string variable during memory allocation.
+
+$0052  
+Unused.
+
+$0053  
+Step size of garbage collection. Values: $03; $07.
+
+$0054-$0056  
+JMP ABS machine instruction, jump to current BASIC function.  
+$0055-$0056, 85-86: Execution address of current BASIC function.
+
+$0057-$005B  
+Arithmetic register #3 (5 bytes).
+
+$005C-$0060  
+Arithmetic register #4 (5 bytes).
+
+$0061-$0065  
+FAC, arithmetic register #1 (5 bytes).
+
+$0066  
+Sign of FAC. Bits:
+*   Bit #7: 0 = Positive; 1 = Negative.
+
+$0067  
+Number of degrees during polynomial evaluation.
+
+$0068  
+Temporary area for various operations.
+
+$0069-$006D  
+ARG, arithmetic register #2 (5 bytes).
+
+$006E  
+Sign of ARG. Bits:
+*   Bit #7: 0 = Positive; 1 = Negative.
+
+$006F-$0070  
+Pointer to first string expression during string comparison.
+
+$0071-$0072  
+Auxiliary pointer during array operations.  
+Temporary area for saving original pointer to current BASIC instruction during VAL().  
+Pointer to current item of polynomial table during polynomial evaluation.
+
+$0073-$008A  
+CHRGET. Machine code routine to read next byte from BASIC program or direct command (24 bytes).  
+$0079, 121: CHRGOT. Read current byte from BASIC program or direct command.  
+$007A-$007B, 122-123: Pointer to current byte in BASIC program or direct command.
+
+$008B-$008F  
+Previous result of RND().
+
+$0090  
+Value of ST variable, device status for serial bus and datasette input/output. Serial bus bits:
+*   Bit #0: Transfer direction during which the timeout occured; 0 = Input; 1 = Output.
+*   Bit #1: 1 = Timeout occurred.
+*   Bit #4: 1 = VERIFY error occurred (only during VERIFY), the file read from the device did not match that in the memory.
+*   Bit #6: 1 = End of file has been reached.
+*   Bit #7: 1 = Device is not present.
+Datasette bits:
+*   Bit #2: 1 = Block is too short (shorter than 192 bytes).
+*   Bit #3: 1 = Block is too long (longer than 192 bytes).
+*   Bit #4: 1 = Not all bytes read with error during pass 1 could be corrected during pass 2, or a VERIFY error occurred, the file read from the device did not match that in the memory.
+*   Bit #5: 1 = Checksum error occurred.
+*   Bit #6: 1 = End of file has been reached (only during reading data files).
+
+$0091  
+Stop key indicator. Values:
+*   $7F: Stop key is pressed.
+*   $FF: Stop key is not pressed.
+
+$0092  
+Unknown. (Timing constant during datasette input.)
+
+$0093  
+LOAD/VERIFY switch. Values:
+*   $00: LOAD.
+*   $01-$FF: VERIFY.
+
+$0094  
+Serial bus output cache status. Bits:
+*   Bit #7: 1 = Output cache dirty, must transfer cache contents upon next output to serial bus.
+
+$0095  
+Serial bus output cache, previous byte to be sent to serial bus.
+
+$0096  
+Unknown. (End of tape indicator during datasette input/output.)
+
+$0097  
+Temporary area for saving original value of Y register during input from RS232.  
+Temporary area for saving original value of X register during input from datasette.
+
+$0098  
+Number of files currently open. Values: $00-$0A, 0-10.
+
+$0099  
+Current input device number.  
+Default: $00, keyboard.
+
+$009A  
+Current output device number.  
+Default: $03, screen.
+
+$009B  
+Unknown. (Parity bit during datasette input/output.)
+
+$009C  
+Unknown. (Byte ready indicator during datasette input/output.)
+
+$009D  
+System error display switch. Bits:
+*   Bit #6: 0 = Suppress I/O error messages; 1 = Display them.
+*   Bit #7: 0 = Suppress system messages; 1 = Display them.
+
+$009E  
+Byte to be put into output buffer during RS232 and datasette output.  
+Block header type during datasette input/output.  
+Length of file name during datasette input/output.  
+Error counter during LOAD from datasette. Values: $00-$3E, 0-62.
+
+$009F  
+Auxiliary counter for writing file name into datasette buffer.  
+Auxiliary counter for comparing requested file name with file name read from datasette during datasette input.  
+Error correction counter during LOAD from datasette. Values: $00-$3E, 0-62.
+
+$00A0-$00A2  
+Value of TI variable, time of day, increased by 1 every 1/60 second (on PAL machines). Values: $000000-$4F19FF, 0-518399 (on PAL machines).
+
+$00A3  
+EOI switch during serial bus output. Bits:
+*   Bit #7: 0 = Send byte right after handshake; 1 = Do EOI delay first.
+
+Bit counter during datasette output.
+
+$00A4  
+Byte buffer during serial bus input.  
+Parity during datasette input/output.
+
+$00A5  
+Bit counter during serial bus input/output.  
+Counter for sync mark during datasette output.
+
+$00A6  
+Offset of current byte in datasette buffer.
+
+$00A7  
+Bit buffer during RS232 input.
+
+$00A8  
+Bit counter during RS232 input.
+
+$00A9  
+Stop bit switch during RS232 input. Values:
+*   $00: Data bit.
+*   $01-$FF: Stop bit.
+
+$00AA  
+Byte buffer during RS232 input.
+
+$00AB  
+Parity during RS232 input.  
+Computed block checksum during datasette input.
+
+$00AC-$00AD  
+Start address for SAVE to serial bus.  
+Pointer to current byte during SAVE to serial bus or datasette.  
+Pointer to line in screen memory to be scrolled during scrolling the screen.
+
+$00AE-$00AF  
+Load address read from input file and pointer to current byte during LOAD/VERIFY from serial bus.  
+End address after LOAD/VERIFY from serial bus or datasette.  
+End address for SAVE to serial bus or datasette.  
+Pointer to line in Color RAM to be scrolled during scrolling the screen.
+
+$00B0-$00B1  
+Unknown.
+
+$00B2-$00B3  
+Pointer to datasette buffer.  
+Default: $033C, 828.
+
+$00B4  
+Bit counter and stop bit switch during RS232 output. Bits:
+*   Bits #0-#6: Bit count.
+*   Bit #7: 0 = Data bit; 1 = Stop bit.
+Bit counter during datasette input/output.
+
+$00B5  
+Bit buffer (in bit #2) during RS232 output.
+
+$00B6  
+Byte buffer during RS232 output.
+
+$00B7  
+Length of file name or disk command; first parameter of LOAD, SAVE and VERIFY or fourth parameter of OPEN. Values:
+*   $00: No parameter.
+*   $01-$FF: Parameter length.
+
+$00B8  
+Logical number of current file.
+
+$00B9  
+Secondary address of current file.
+
+$00BA  
+Device number of current file.
+
+$00BB-$00BC  
+Pointer to current file name or disk command; first parameter of LOAD, SAVE and VERIFY or fourth parameter of OPEN.
+
+$00BD  
+Parity during RS232 output.  
+Byte buffer during datasette input/output.
+
+$00BE  
+Block counter during datasette input/output.
+
+$00BF  
+Unknown.
+
+$00C0  
+Datasette motor switch. Values:
+*   $00: No button was pressed, motor has been switched off. If a button is pressed on the datasette, must switch motor on.
+*   $01-$FF: Motor is on.
+
+$00C1-$00C2  
+Start address during SAVE to serial bus, LOAD and VERIFY from datasette and SAVE to datasette.  
+Pointer to current byte during memory test.
+
+$00C3-$00C4  
+Start address for a secondary address of 0 for LOAD and VERIFY from serial bus or datasette.  
+Pointer to ROM table of default vectors during initialization of I/O vectors.
+
+$00C5  
+Matrix code of key previously pressed. Values:
+*   $00-$3F: Keyboard matrix code.
+*   $40: No key was pressed at the time of previous check.
+
+$00C6  
+Length of keyboard buffer. Values:
+*   $00, 0: Buffer is empty.
+*   $01-$0A, 1-10: Buffer length.
+
+$00C7  
+Reverse mode switch. Values:
+*   $00: Normal mode.
+*   $12: Reverse mode.
+
+$00C8  
+Length of line minus 1 during screen input. Values: $27, 39; $4F, 79.
+
+$00C9  
+Cursor row during screen input. Values: $00-$18, 0-24.
+
+$00CA  
+Cursor column during screen input. Values: $00-$27, 0-39.
+
+$00CB  
+Matrix code of key currently being pressed. Values:
+*   $00-$3F: Keyboard matrix code.
+*   $40: No key is currently pressed.
+
+$00CC  
+Cursor visibility switch. Values:
+*   $00: Cursor is on.
+*   $01-$FF: Cursor is off.
+
+$00CD  
+Delay counter for changing cursor phase. Values:
+*   $00, 0: Must change cursor phase.
+*   $01-$14, 1-20: Delay.
+
+$00CE  
+Screen code of character under cursor.
+
+$00CF  
+Cursor phase switch. Values:
+*   $00: Cursor off phase, original character visible.
+*   $01: Cursor on phase, reverse character visible.
+
+$00D0  
+End of line switch during screen input. Values:
+*   $00: Return character reached, end of line.
+*   $01-$FF: Still reading characters from line.
+
+$00D1-$00D2  
+Pointer to current line in screen memory.
+
+$00D3  
+Current cursor column. Values: $00-$27, 0-39.
+
+$00D4  
+Quotation mode switch. Values:
+*   $00: Normal mode.
+*   $01: Quotation mode.
+
+$00D5  
+Length of current screen line minus 1. Values: $27, 39; $4F, 79.
+
+$00D6  
+Current cursor row. Values: $00-$18, 0-24.
+
+$00D7  
+PETSCII code of character during screen input/output.  
+Bit buffer during datasette input.  
+Block checksum during datasette output.
+
+$00D8  
+Number of insertions. Values:
+*   $00: No insertions made, normal mode, control codes change screen layout or behavior.
+*   $01-$FF: Number of insertions, when inputting this many character next, those must be turned into control codes, similarly to quotation mode.
+
+$00D9-$00F1  
+High byte of pointers to each line in screen memory (25 bytes). Values:
+*   $00-$7F: Pointer high byte.
+*   $80-$FF: No pointer, line is an extension of previous line on screen.
+
+$00F2  
+Temporary area during scrolling the screen.
+
+$00F3-$00F4  
+Pointer to current line in Color RAM.
+
+$00F5-$00F6  
+Pointer to current conversion table during conversion from keyboard matrix codes to PETSCII codes.
+
+$00F7-$00F8  
+Pointer to RS232 input buffer. Values:
+*   $0000-$00FF: No buffer defined, a new buffer must be allocated upon RS232 input.
+*   $0100-$FFFF: Buffer pointer.
+
+$00F9-$00FA  
+Pointer to RS232 output buffer. Values:
+*   $0000-$00FF: No buffer defined, a new buffer must be allocated upon RS232 output.
+*   $0100-$FFFF: Buffer pointer.
+
+$00FB-$00FE  
+Unused (4 bytes).
+
+$00FF-$010A  
+Buffer for conversion from floating point to string (12 bytes.)
+
+$0100-$01FF
+Processor stack**
+
+$00FF-$010A  
+Buffer for conversion from floating point to string (12 bytes.)
+
+$0100-$013D  
+Pointers to bytes read with error during datasette input (62 bytes, 31 entries).
+
+$0100-$01FF  
+Processor stack. Also used for storing data related to FOR and GOSUB.
+
+$0200-$0258  
+Input buffer, storage area for data read from screen (89 bytes).
+
+$0259-$0262  
+Logical numbers assigned to files (10 bytes, 10 entries).
+
+$0263-$026C  
+Device numbers assigned to files (10 bytes, 10 entries).
+
+$026D-$0276  
+Secondary addresses assigned to files (10 bytes, 10 entries).
+
+$0277-$0280  
+Keyboard buffer (10 bytes, 10 entries).
+
+$0281-$0282  
+Pointer to beginning of BASIC area after memory test.  
+Default: $0800, 2048.
+
+$0283-$0284  
+Pointer to end of BASIC area after memory test.  
+Default: $A000, 40960.
+
+$0285  
+Unused. (Serial bus timeout.)
+
+$0286  
+Current color, cursor color. Values: $00-$0F, 0-15.
+
+$0287  
+Color of character under cursor. Values: $00-$0F, 0-15.
+
+$0288  
+High byte of pointer to screen memory for screen input/output.  
+Default: $04, $0400, 1024.
+
+$0289  
+Maximum length of keyboard buffer. Values:
+*   $00, 0: No buffer.
+*   $01-$0F, 1-15: Buffer size.
+
+$028A  
+Keyboard repeat switch. Bits:
+*   Bits #6-#7: %00 = Only cursor up/down, cursor left/right, Insert/Delete and Space repeat; %01 = No key repeats; %1x = All keys repeat.
+
+$028B  
+Delay counter during repeat sequence, for delaying between successive repeats. Values:
+*   $00, 0: Must repeat key.
+*   $01-$04, 1-4: Delay repetition.
+
+$028C  
+Repeat sequence delay counter, for delaying before first repetition. Values:
+*   $00, 0: Must start repeat sequence.
+*   $01-$10, 1-16: Delay repeat sequence.
+
+$028D  
+Shift key indicator. Bits:
+*   Bit #0: 1 = One or more of left Shift, right Shift or Shift Lock is currently being pressed or locked.
+*   Bit #1: 1 = Commodore is currently being pressed.
+*   Bit #2: 1 = Control is currently being pressed.
+
+$028E  
+Previous value of shift key indicator. Bits:
+*   Bit #0: 1 = One or more of left Shift, right Shift or Shift Lock was pressed or locked at the time of previous check.
+*   Bit #1: 1 = Commodore was pressed at the time of previous check.
+*   Bit #2: 1 = Control was pressed at the time of previous check.
+
+$028F-$0290  
+Execution address of routine that, based on the status of shift keys, sets the pointer at memory address $00F5-$00F6 to the appropriate conversion table for converting keyboard matrix codes to PETSCII codes.  
+Default: $EB48.
+
+$0291  
+Commodore-Shift switch. Bits:
+*   Bit #7: 0 = Commodore-Shift is enabled, the key combination will toggle between the uppercase/graphics and lowercase/uppercase character set; 1 = Commodore-Shift is disabled.
+
+$0292  
+Scroll direction switch during scrolling the screen. Values:
+*   $00: Insertion of line before current line, current line and all lines below it must be scrolled 1 line downwards.
+*   $01-$FF: Bottom of screen reached, complete screen must be scrolled 1 line upwards.
+
+$0293  
+RS232 control register. Bits:
+*   Bits #0-#3: Baud rate, transfer speed. Values:
+    *   %0000: User specified.
+    *   %0001: 50 bit/s.
+    *   %0010: 75 bit/s.
+    *   %0011: 110 bit/s.
+    *   %0100: 150 bit/s.
+    *   %0101: 300 bit/s.
+    *   %0110: 600 bit/s.
+    *   %0111: 1200 bit/s.
+    *   %1000: 2400 bit/s.
+    *   %1001: 1800 bit/s.
+    *   %1010: 2400 bit/s.
+    *   %1011: 3600 bit/s.
+    *   %1100: 4800 bit/s.
+    *   %1101: 7200 bit/s.
+    *   %1110: 9600 bit/s.
+    *   %1111: 19200 bit/s.
+*   Bits #5-#6: Byte size, number of data bits per byte; %00 = 8; %01 = 7, %10 = 6; %11 = 5.
+*   Bit #7: Number of stop bits; 0 = 1 stop bit; 1 = 2 stop bits.
+
+$0294  
+RS232 command register. Bits:
+*   Bit #0: Synchronization type; 0 = 3 lines; 1 = X lines.
+*   Bit #4: Transmission type; 0 = Duplex; 1 = Half duplex.
+*   Bits #5-#7: Parity mode. Values:
+    *   %xx0: No parity check, bit #7 does not exist.
+    *   %001: Odd parity.
+    *   %011: Even parity.
+    *   %101: No parity check, bit #7 is always 1.
+    *   %111: No parity check, bit #7 is always 0.
+
+$0295-$0296  
+Default value of RS232 output timer, based on baud rate. (Must be filled with actual value before RS232 input/output if baud rate is "user specified" in RS232 control register, memory address $0293.)
+
+$0297  
+Value of ST variable, device status for RS232 input/output. Bits:
+*   Bit #0: 1 = Parity error occurred.
+*   Bit #1: 1 = Frame error, a stop bit with the value of 0, occurred.
+*   Bit #2: 1 = Input buffer underflow occurred, too much data has arrived but it has not been read from the buffer in time.
+*   Bit #3: 1 = Input buffer is empty, nothing to read.
+*   Bit #4: 0 = Sender is Clear To Send; 1 = Sender is not ready to send data to receiver.
+*   Bit #6: 0 = Receiver reports Data Set Ready; 1 = Receiver is not ready to receive data.
+*   Bit #7: 1 = Carrier loss, a stop bit and a data byte both with the value of 0, detected.
+
+$0298  
+RS232 byte size, number of data bits per data byte, default value for bit counters.
+
+$0299-$029A  
+Default value of RS232 input timer, based on baud rate. (Calculated automatically from default value of RS232 output timer, at memory address $0295-$0296.)
+
+$029B  
+Offset of byte received in RS232 input buffer.
+
+$029C  
+Offset of current byte in RS232 input buffer.
+
+$029D  
+Offset of byte to send in RS232 output buffer.
+
+$029E  
+Offset of current byte in RS232 output buffer.
+
+$029F-$02A0  
+Temporary area for saving pointer to original interrupt service routine during datasette input output. Values:
+*   $0000-$00FF: No datasette input/output took place yet or original pointer has been already restored.
+*   $0100-$FFFF: Original pointer, datasette input/output currently in progress.
+
+$02A1  
+Temporary area for saving original value of CIA#2 interrupt control register, at memory address $DD0D, during RS232 input/output.
+
+$02A2  
+Temporary area for saving original value of CIA#1 timer #1 control register, at memory address $DC0E, during datasette input/output.
+
+$02A3  
+Temporary area for saving original value of CIA#1 interrupt control register, at memory address $DC0D, during datasette input/output.
+
+$02A4  
+Temporary area for saving original value of CIA#1 timer #1 control register, at memory address $DC0E, during datasette input/output.
+
+$02A5  
+Number of line currently being scrolled during scrolling the screen.
+
+$02A6  
+PAL/NTSC switch, for selecting RS232 baud rate from the proper table. Values:
+*   $00: NTSC.
+*   $01: PAL.
+
+$02A7-$02FF  
+Unused (89 bytes).
+
+$0300-$0301  
+Execution address of warm reset, displaying optional BASIC error message and entering BASIC idle loop.  
+Default: $E38B.
+
+$0302-$0303  
+Execution address of BASIC idle loop.  
+Default: $A483.
+
+$0304-$0305  
+Execution address of BASIC line tokenizater routine.  
+Default: $A57C.
+
+$0306-$0307  
+Execution address of BASIC token decoder routine.  
+Default: $A71A.
+
+$0308-$0309  
+Execution address of BASIC instruction executor routine.  
+Default: $A7E4.
+
+$030A-$030B  
+Execution address of routine reading next item of BASIC expression.  
+Default: $AE86.
+
+$030C  
+Default value of register A for SYS.  
+
+$030D  
+Default value of register X for SYS.  
+
+$030E  
+Default value of register Y for SYS.  
+
+$030F  
+Default value of status register for SYS.  
+
+$0310-$0312  
+JMP ABS machine instruction, jump to USR() function.  
+$0311-$0312, 785-786: Execution address of USR() function.
+
+$0313  
+Unused.
+
+$0314-$0315  
+Execution address of interrupt service routine.  
+Default: $EA31.
+
+$0316-$0317  
+Execution address of BRK service routine.  
+Default: $FE66.
+
+$0318-$0319  
+Execution address of non-maskable interrupt service routine.  
+Default: $FE47.
+
+$031A-$031B  
+Execution address of OPEN, routine opening files.  
+Default: $F34A.
+
+$031C-$031D  
+Execution address of CLOSE, routine closing files.  
+Default: $F291.
+
+$031E-$031F  
+Execution address of CHKIN, routine defining file as default input.  
+Default: $F20E.
+
+$0320-$0321  
+Execution address of CHKOUT, routine defining file as default output.  
+Default: $F250.
+
+$0322-$0323  
+Execution address of CLRCHN, routine initializating input/output.  
+Default: $F333.
+
+$0324-$0325  
+Execution address of CHRIN, data input routine, except for keyboard and RS232 input.  
+Default: $F157.
+
+$0326-$0327  
+Execution address of CHROUT, general purpose data output routine.  
+Default: $F1CA.
+
+$0328-$0329  
+Execution address of STOP, routine checking the status of Stop key indicator, at memory address $0091.  
+Default: $F6ED.
+
+$032A-$032B  
+Execution address of GETIN, general purpose data input routine.  
+Default: $F13E.
+
+$032C-$032D  
+Execution address of CLALL, routine initializing input/output and clearing all file assignment tables.  
+Default: $F32F.
+
+$032E-$032F  
+Unused.  
+Default: $FE66.
+
+$0330-$0331  
+Execution address of LOAD, routine loading files.  
+Default: $F4A5.
+
+$0332-$0333  
+Execution address of SAVE, routine saving files.  
+Default: $F5ED.
+
+$0334-$033B  
+Unused (8 bytes).
+
+$033C-$03FB  
+Datasette buffer (192 bytes).
+
+$03FC-$03FF  
+Unused (4 bytes).
+
+$0400-$07E7  
+Default area of screen memory (1000 bytes).
+
+$07E8-$07F7  
+Unused (16 bytes).
+
+$07F8-$07FF  
+Default area for sprite pointers (8 bytes).
+
+$0800  
+Unused. (Must contain a value of 0 so that the BASIC program can be RUN.)
+
+$0801-$9FFF  
+Default BASIC area (38911 bytes).
+
+$8000-$9FFF  
+Optional cartridge ROM (8192 bytes).  
+$8000-$8001, 32768-32769: Execution address of cold reset.  
+$8002-$8003, 32770-32771: Execution address of non-maskable interrupt service routine.  
+$8004-$8008, 32772-32776: Cartridge signature. If contains the uppercase PETSCII string "CBM80" ($C3,$C2,$CD,$38,$30) then the routine vectors are accepted by the KERNAL.
+
+$A000-$BFFF  
+BASIC ROM or RAM area (8192 bytes); depends on the value of bits #0-#2 of the processor port at memory address $0001:
+*   %x00, %x01 or %x10: RAM area.
+*   %x11: BASIC ROM.
+    
+$C000-$CFFF  
+Upper RAM area (4096 bytes).
+
+$D000-$DFFF
+I/O Area
+
+$D000-$DFFF  
+I/O Area (memory mapped chip registers), Character ROM or RAM area (4096 bytes); depends on the value of bits #0-#2 of the processor port at memory address $0001:
+*   %x00: RAM area.
+*   %0xx: Character ROM. (Except for the value %000, see above.)
+*   %1xx: I/O Area. (Except for the value %100, see above.)
+
+$D000-$DFFF  
+Character ROM, shape of characters (4096 bytes).
+
+$D000-$D7FF  
+Shape of characters in uppercase/graphics character set (2048 bytes, 256 entries).
+
+$D800-$DFFF  
+Shape of characters in lowercase/uppercase character set (2048 bytes, 256 entries).
+
+$D000-$D3FF
+VIC-II; video display**
+
+$D000  
+Sprite #0 X-coordinate (only bits #0-#7).
+
+$D001  
+Sprite #0 Y-coordinate.
+
+$D002  
+Sprite #1 X-coordinate (only bits #0-#7).
+
+$D003  
+Sprite #1 Y-coordinate.
+
+$D004  
+Sprite #2 X-coordinate (only bits #0-#7).
+
+$D005  
+Sprite #2 Y-coordinate.
+
+$D006  
+Sprite #3 X-coordinate (only bits #0-#7).
+
+$D007  
+Sprite #3 Y-coordinate.
+
+$D008  
+Sprite #4 X-coordinate (only bits #0-#7).
+
+$D009  
+Sprite #4 Y-coordinate.
+
+$D00A  
+Sprite #5 X-coordinate (only bits #0-#7).
+
+$D00B  
+Sprite #5 Y-coordinate.
+
+$D00C  
+Sprite #6 X-coordinate (only bits #0-#7).
+
+$D00D  
+Sprite #6 Y-coordinate.
+
+$D00E  
+Sprite #7 X-coordinate (only bits #0-#7).
+
+$D00F  
+Sprite #7 Y-coordinate.
+
+$D010  
+Sprite #0-#7 X-coordinates (bit #8). Bits:
+*   Bit #x: Sprite #x X-coordinate bit #8.
+
+$D011  
+Screen control register #1. Bits:
+*   Bits #0-#2: Vertical raster scroll.
+*   Bit #3: Screen height; 0 = 24 rows; 1 = 25 rows.
+*   Bit #4: 0 = Screen off, complete screen is covered by border; 1 = Screen on, normal screen contents are visible.
+*   Bit #5: 0 = Text mode; 1 = Bitmap mode.
+*   Bit #6: 1 = Extended background mode on.
+*   Bit #7: Read: Current raster line (bit #8).  
+    Write: Raster line to generate interrupt at (bit #8).
+Default: $1B, %00011011.
+
+$D012  
+Read: Current raster line (bits #0-#7).  
+Write: Raster line to generate interrupt at (bits #0-#7).
+
+$D013 Read-only.
+Light pen X-coordinate (bits #1-#8).  
+
+$D014 Read-only.
+Light pen Y-coordinate.  
+
+$D015  
+Sprite enable register. Bits:
+*   Bit #x: 1 = Sprite #x is enabled, drawn onto the screen.
+
+$D016  
+Screen control register #2. Bits:
+*   Bits #0-#2: Horizontal raster scroll.
+*   Bit #3: Screen width; 0 = 38 columns; 1 = 40 columns.
+*   Bit #4: 1 = Multicolor mode on.
+Default: $C8, %11001000.
+
+$D017  
+Sprite double height register. Bits:
+*   Bit #x: 1 = Sprite #x is stretched to double height.
+
+$D018  
+Memory setup register. Bits:
+*   Bits #1-#3: In text mode, pointer to character memory (bits #11-#13), relative to VIC bank, memory address $DD00. Values:
+    *   %000, 0: $0000-$07FF, 0-2047.
+    *   %001, 1: $0800-$0FFF, 2048-4095.
+    *   %010, 2: $1000-$17FF, 4096-6143.
+    *   %011, 3: $1800-$1FFF, 6144-8191.
+    *   %100, 4: $2000-$27FF, 8192-10239.
+    *   %101, 5: $2800-$2FFF, 10240-12287.
+    *   %110, 6: $3000-$37FF, 12288-14335.
+    *   %111, 7: $3800-$3FFF, 14336-16383.
+    
+    Values %010 and %011 in VIC bank #0 and #2 select Character ROM instead.  
+    In bitmap mode, pointer to bitmap memory (bit #13), relative to VIC bank, memory address $DD00. Values:
+    
+    *   %0xx, 0: $0000-$1FFF, 0-8191.
+    *   %1xx, 4: $2000-$3FFF, 8192-16383.
+*   Bits #4-#7: Pointer to screen memory (bits #10-#13), relative to VIC bank, memory address $DD00. Values:
+    *   %0000, 0: $0000-$03FF, 0-1023.
+    *   %0001, 1: $0400-$07FF, 1024-2047.
+    *   %0010, 2: $0800-$0BFF, 2048-3071.
+    *   %0011, 3: $0C00-$0FFF, 3072-4095.
+    *   %0100, 4: $1000-$13FF, 4096-5119.
+    *   %0101, 5: $1400-$17FF, 5120-6143.
+    *   %0110, 6: $1800-$1BFF, 6144-7167.
+    *   %0111, 7: $1C00-$1FFF, 7168-8191.
+    *   %1000, 8: $2000-$23FF, 8192-9215.
+    *   %1001, 9: $2400-$27FF, 9216-10239.
+    *   %1010, 10: $2800-$2BFF, 10240-11263.
+    *   %1011, 11: $2C00-$2FFF, 11264-12287.
+    *   %1100, 12: $3000-$33FF, 12288-13311.
+    *   %1101, 13: $3400-$37FF, 13312-14335.
+    *   %1110, 14: $3800-$3BFF, 14336-15359.
+    *   %1111, 15: $3C00-$3FFF, 15360-16383.
+
+$D019  
+Interrupt status register.
+Read bits:
+*   Bit #0: 1 = Current raster line is equal to the raster line to generate interrupt at.
+*   Bit #1: 1 = Sprite-background collision occurred.
+*   Bit #2: 1 = Sprite-sprite collision occurred.
+*   Bit #3: 1 = Light pen signal arrived.
+*   Bit #7: 1 = An event (or more events), that may generate an interrupt, occurred and it has not been (not all of them have been) acknowledged yet.
+Write bits:
+*   Bit #0: 1 = Acknowledge raster interrupt.
+*   Bit #1: 1 = Acknowledge sprite-background collision interrupt.
+*   Bit #2: 1 = Acknowledge sprite-sprite collision interrupt.
+*   Bit #3: 1 = Acknowledge light pen interrupt.
+
+$D01A  
+Interrupt control register. Bits:
+*   Bit #0: 1 = Raster interrupt enabled.
+*   Bit #1: 1 = Sprite-background collision interrupt enabled.
+*   Bit #2: 1 = Sprite-sprite collision interrupt enabled.
+*   Bit #3: 1 = Light pen interrupt enabled.
+
+$D01B  
+Sprite priority register. Bits:
+*   Bit #x: 0 = Sprite #x is drawn in front of screen contents; 1 = Sprite #x is behind screen contents.
+
+$D01C  
+Sprite multicolor mode register. Bits:
+*   Bit #x: 0 = Sprite #x is single color; 1 = Sprite #x is multicolor.
+
+$D01D  
+Sprite double width register. Bits:
+*   Bit #x: 1 = Sprite #x is stretched to double width.
+
+$D01E  
+Sprite-sprite collision register. Read bits:
+*   Bit #x: 1 = Sprite #x collided with another sprite.
+Write: Enable further detection of sprite-sprite collisions.
+
+$D01F  
+Sprite-background collision register. Read bits:
+*   Bit #x: 1 = Sprite #x collided with background.
+Write: Enable further detection of sprite-background collisions.
+
+$D020  
+Border color (only bits #0-#3).
+
+$D021  
+Background color (only bits #0-#3).
+
+$D022  
+Extra background color #1 (only bits #0-#3).
+
+$D023  
+Extra background color #2 (only bits #0-#3).
+
+$D024  
+Extra background color #3 (only bits #0-#3).
+
+$D025  
+Sprite extra color #1 (only bits #0-#3).
+
+$D026  
+Sprite extra color #1 (only bits #0-#3).
+
+$D027  
+Sprite #0 color (only bits #0-#3).
+
+$D028  
+Sprite #1 color (only bits #0-#3).
+
+$D029  
+Sprite #2 color (only bits #0-#3).
+
+$D02A  
+Sprite #3 color (only bits #0-#3).
+
+$D02B  
+Sprite #4 color (only bits #0-#3).
+
+$D02C  
+Sprite #5 color (only bits #0-#3).
+
+$D02D  
+Sprite #6 color (only bits #0-#3).
+
+$D02E  
+Sprite #7 color (only bits #0-#3).
+
+$D02F-$D03F  
+Unusable (17 bytes).
+
+$D040-$D3FF  
+VIC-II register images (repeated every $40, 64 bytes).
+
+$D400-$D7FF, 54272-55295  
+SID; audio
+
+$D400-$D401 Write-only.
+Voice #1 frequency.  
+
+$D402-$D403 Write-only.
+Voice #1 pulse width.  
+
+$D404 Write-only.
+Voice #1 control register. Bits:
+*   Bit #0: 0 = Voice off, Release cycle; 1 = Voice on, Attack-Decay-Sustain cycle.
+*   Bit #1: 1 = Synchronization enabled.
+*   Bit #2: 1 = Ring modulation enabled.
+*   Bit #3: 1 = Disable voice, reset noise generator.
+*   Bit #4: 1 = Triangle waveform enabled.
+*   Bit #5: 1 = Saw waveform enabled.
+*   Bit #6: 1 = Rectangle waveform enabled.
+*   Bit #7: 1 = Noise enabled.
+
+$D405 Write-only.
+Voice #1 Attack and Decay length. Bits:
+*   Bits #0-#3: Decay length. Values:
+    *   %0000, 0: 6 ms.
+    *   %0001, 1: 24 ms.
+    *   %0010, 2: 48 ms.
+    *   %0011, 3: 72 ms.
+    *   %0100, 4: 114 ms.
+    *   %0101, 5: 168 ms.
+    *   %0110, 6: 204 ms.
+    *   %0111, 7: 240 ms.
+    *   %1000, 8: 300 ms.
+    *   %1001, 9: 750 ms.
+    *   %1010, 10: 1.5 s.
+    *   %1011, 11: 2.4 s.
+    *   %1100, 12: 3 s.
+    *   %1101, 13: 9 s.
+    *   %1110, 14: 15 s.
+    *   %1111, 15: 24 s.
+*   Bits #4-#7: Attack length. Values:
+    *   %0000, 0: 2 ms.
+    *   %0001, 1: 8 ms.
+    *   %0010, 2: 16 ms.
+    *   %0011, 3: 24 ms.
+    *   %0100, 4: 38 ms.
+    *   %0101, 5: 56 ms.
+    *   %0110, 6: 68 ms.
+    *   %0111, 7: 80 ms.
+    *   %1000, 8: 100 ms.
+    *   %1001, 9: 250 ms.
+    *   %1010, 10: 500 ms.
+    *   %1011, 11: 800 ms.
+    *   %1100, 12: 1 s.
+    *   %1101, 13: 3 s.
+    *   %1110, 14: 5 s.
+    *   %1111, 15: 8 s.
+
+$D406 Write-only.
+Voice #1 Sustain volume and Release length. Bits:
+*   Bits #0-#3: Release length. Values:
+    *   %0000, 0: 6 ms.
+    *   %0001, 1: 24 ms.
+    *   %0010, 2: 48 ms.
+    *   %0011, 3: 72 ms.
+    *   %0100, 4: 114 ms.
+    *   %0101, 5: 168 ms.
+    *   %0110, 6: 204 ms.
+    *   %0111, 7: 240 ms.
+    *   %1000, 8: 300 ms.
+    *   %1001, 9: 750 ms.
+    *   %1010, 10: 1.5 s.
+    *   %1011, 11: 2.4 s.
+    *   %1100, 12: 3 s.
+    *   %1101, 13: 9 s.
+    *   %1110, 14: 15 s.
+    *   %1111, 15: 24 s.
+*   Bits #4-#7: Sustain volume.
+
+$D407-$D408 Write-only.
+Voice #2 frequency.  
+
+$D409-$D40A Write-only.
+Voice #2 pulse width.  
+
+$D40B Write-only.
+Voice #2 control register.  
+
+$D40C Write-only.
+Voice #2 Attack and Decay length.  
+
+$D40D Write-only.
+Voice #2 Sustain volume and Release length.  
+
+$D40E-$D40F Write-only.
+Voice #3 frequency.  
+
+$D410-$D411 Write-only.
+Voice #3 pulse width.  
+
+$D412 Write-only.
+Voice #3 control register.  
+
+$D413 Write-only.
+Voice #3 Attack and Decay length.
+
+$D414 Write-only.
+Voice #3 Sustain volume and Release length.  
+
+$D415 Write-only.
+Filter cut off frequency (bits #0-#2).  
+
+$D416 Write-only.
+Filter cut off frequency (bits #3-#10).  
+
+$D417 Write-only.
+Filter control. Bits:
+*   Bit #0: 1 = Voice #1 filtered.
+*   Bit #1: 1 = Voice #2 filtered.
+*   Bit #2: 1 = Voice #3 filtered.
+*   Bit #3: 1 = External voice filtered.
+*   Bits #4-#7: Filter resonance.
+
+$D418 Write-only.
+Volume and filter modes. Bits:
+*   Bits #0-#3: Volume.
+*   Bit #4: 1 = Low pass filter enabled.
+*   Bit #5: 1 = Band pass filter enabled.
+*   Bit #6: 1 = High pass filter enabled.
+*   Bit #7: 1 = Voice #3 disabled.
+
+$D419 Read-only.
+X value of paddle selected at memory address $DC00. (Updates at every 512 system cycles.)
+
+$D41A Read-only.
+Y value of paddle selected at memory address $DC00. (Updates at every 512 system cycles.)
+
+$D41B Read-only.
+Voice #3 waveform output.
+
+$D41C Read-only.
+Voice #3 ADSR output.
+
+$D41D-$D41F  
+Unusable (3 bytes).
+
+$D420-$D7FF  
+SID register images (repeated every $20, 32 bytes).
+
+$D800-$DBFF
+Color RAM
+
+$D800-$DBE7  
+Color RAM (1000 bytes, only bits #0-#3).
+
+$DBE8-$DBFF  
+Unused (24 bytes, only bits #0-#3).
+
+$DC00-$DCFF
+CIA#1; inputs (keyboard, joystick, mouse), datasette, IRQ control
+
+$DC00  
+Port A, keyboard matrix columns and joystick #2. Read bits:
+*   Bit #0: 0 = Port 2 joystick up pressed.
+*   Bit #1: 0 = Port 2 joystick down pressed.
+*   Bit #2: 0 = Port 2 joystick left pressed.
+*   Bit #3: 0 = Port 2 joystick right pressed.
+*   Bit #4: 0 = Port 2 joystick fire pressed.
+Write bits:
+*   Bit #x: 0 = Select keyboard matrix column #x.
+*   Bits #6-#7: Paddle selection; %01 = Paddle #1; %10 = Paddle #2.
+
+$DC01  
+Port B, keyboard matrix rows and joystick #1. Bits:
+*   Bit #x: 0 = A key is currently being pressed in keyboard matrix row #x, in the column selected at memory address $DC00.
+*   Bit #0: 0 = Port 1 joystick up pressed.
+*   Bit #1: 0 = Port 1 joystick down pressed.
+*   Bit #2: 0 = Port 1 joystick left pressed.
+*   Bit #3: 0 = Port 1 joystick right pressed.
+*   Bit #4: 0 = Port 1 joystick fire pressed.
+
+$DC02  
+Port A data direction register.
+*   Bit #x: 0 = Bit #x in port A can only be read; 1 = Bit #x in port A can be read and written.
+
+$DC03  
+Port B data direction register.
+*   Bit #x: 0 = Bit #x in port B can only be read; 1 = Bit #x in port B can be read and written.
+
+$DC04-$DC05  
+Timer A. Read: Current timer value.  
+Write: Set timer start value.
+
+$DC06-$DC07  
+Timer B. Read: Current timer value.  
+Write: Set timer start value.
+
+$DC08  
+Time of Day, tenth seconds (in BCD). Values: $00-$09. Read: Current TOD value.  
+Write: Set TOD or alarm time.
+
+$DC09  
+Time of Day, seconds (in BCD). Values: $00-$59. Read: Current TOD value.  
+Write: Set TOD or alarm time.
+
+$DC0A  
+Time of Day, minutes (in BCD). Values: $00-$59. Read: Current TOD value.  
+Write: Set TOD or alarm time.
+
+$DC0B  
+Time of Day, hours (in BCD). Read bits:
+*   Bits #0-#5: Hours.
+*   Bit #7: 0 = AM; 1 = PM.
+Write: Set TOD or alarm time.
+
+$DC0C  
+Serial shift register. (Bits are read and written upon every positive edge of the CNT pin.)
+
+$DC0D  
+Interrupt control and status register. Read bits:
+*   Bit #0: 1 = Timer A underflow occurred.
+*   Bit #1: 1 = Timer B underflow occurred.
+*   Bit #2: 1 = TOD is equal to alarm time.
+*   Bit #3: 1 = A complete byte has been received into or sent from serial shift register.
+*   Bit #4: Signal level on FLAG pin, datasette input.
+*   Bit #7: An interrupt has been generated.
+Write bits:
+*   Bit #0: 1 = Enable interrupts generated by timer A underflow.
+*   Bit #1: 1 = Enable interrupts generated by timer B underflow.
+*   Bit #2: 1 = Enable TOD alarm interrupt.
+*   Bit #3: 1 = Enable interrupts generated by a byte having been received/sent via serial shift register.
+*   Bit #4: 1 = Enable interrupts generated by positive edge on FLAG pin.
+*   Bit #7: Fill bit; bits #0-#6, that are set to 1, get their values from this bit; bits #0-#6, that are set to 0, are left unchanged.
+
+$DC0E  
+Timer A control register. Bits:
+*   Bit #0: 0 = Stop timer; 1 = Start timer.
+*   Bit #1: 1 = Indicate timer underflow on port B bit #6.
+*   Bit #2: 0 = Upon timer underflow, invert port B bit #6; 1 = upon timer underflow, generate a positive edge on port B bit #6 for 1 system cycle.
+*   Bit #3: 0 = Timer restarts upon underflow; 1 = Timer stops upon underflow.
+*   Bit #4: 1 = Load start value into timer.
+*   Bit #5: 0 = Timer counts system cycles; 1 = Timer counts positive edges on CNT pin.
+*   Bit #6: Serial shift register direction; 0 = Input, read; 1 = Output, write.
+*   Bit #7: TOD speed; 0 = 60 Hz; 1 = 50 Hz.
+
+$DC0F  
+Timer B control register. Bits:
+*   Bit #0: 0 = Stop timer; 1 = Start timer.
+*   Bit #1: 1 = Indicate timer underflow on port B bit #7.
+*   Bit #2: 0 = Upon timer underflow, invert port B bit #7; 1 = upon timer underflow, generate a positive edge on port B bit #7 for 1 system cycle.
+*   Bit #3: 0 = Timer restarts upon underflow; 1 = Timer stops upon underflow.
+*   Bit #4: 1 = Load start value into timer.
+*   Bits #5-#6: %00 = Timer counts system cycles; %01 = Timer counts positive edges on CNT pin; %10 = Timer counts underflows of timer A; %11 = Timer counts underflows of timer A occurring along with a positive edge on CNT pin.
+*   Bit #7: 0 = Writing into TOD registers sets TOD; 1 = Writing into TOD registers sets alarm time.
+    
+$DC10-$DCFF  
+CIA#1 register images (repeated every $10, 16 bytes).
+
+$DD00-$DDFF
+CIA#2; serial bus, RS232, NMI control
+
+$DD00  
+Port A, serial bus access. Bits:
+*   Bits #0-#1: VIC bank. Values:
+    *   %00, 0: Bank #3, $C000-$FFFF, 49152-65535.
+    *   %01, 1: Bank #2, $8000-$BFFF, 32768-49151.
+    *   %10, 2: Bank #1, $4000-$7FFF, 16384-32767.
+    *   %11, 3: Bank #0, $0000-$3FFF, 0-16383.
+*   Bit #2: RS232 TXD line, output bit.
+*   Bit #3: Serial bus ATN OUT; 0 = High; 1 = Low.
+*   Bit #4: Serial bus CLOCK OUT; 0 = High; 1 = Low.
+*   Bit #5: Serial bus DATA OUT; 0 = High; 1 = Low.
+*   Bit #6: Serial bus CLOCK IN; 0 = Low; 1 = High.
+*   Bit #7: Serial bus DATA IN; 0 = Low; 1 = High.
+
+$DD01  
+Port B, RS232 access. Read bits:
+*   Bit #0: RS232 RXD line, input bit.
+*   Bit #3: RS232 RI line.
+*   Bit #4: RS232 DCD line.
+*   Bit #5: User port H pin.
+*   Bit #6: RS232 CTS line; 1 = Sender is ready to send.
+*   Bit #7: RS232 DSR line; 1 = Receiver is ready to receive.
+Write bits:
+*   Bit #1: RS232 RTS line. 1 = Sender is ready to send.
+*   Bit #2: RS232 DTR line. 1 = Receiver is ready to receive.
+*   Bit #3: RS232 RI line.
+*   Bit #4: RS232 DCD line.
+*   Bit #5: User port H pin.
+    
+$DD02  
+Port A data direction register.
+*   Bit #x: 0 = Bit #x in port A can only be read; 1 = Bit #x in port A can be read and written.
+
+$DD03  
+Port B data direction register.
+*   Bit #x: 0 = Bit #x in port B can only be read; 1 = Bit #x in port B can be read and written.
+
+$DD04-$DD05  
+Timer A. Read: Current timer value.  
+Write: Set timer start value.
+
+$DD06-$DD07  
+Timer B. Read: Current timer value.  
+Write: Set timer start value.
+
+$DD08  
+Time of Day, tenth seconds (in BCD). Values: $00-$09. Read: Current TOD value.  
+Write: Set TOD or alarm time.
+
+$DD09  
+Time of Day, seconds (in BCD). Values: $00-$59. Read: Current TOD value.  
+Write: Set TOD or alarm time.
+
+$DD0A  
+Time of Day, minutes (in BCD). Values: $00-$59. Read: Current TOD value.  
+Write: Set TOD or alarm time.
+
+$DD0B  
+Time of Day, hours (in BCD). Read bits:
+*   Bits #0-#5: Hours.
+*   Bit #7: 0 = AM; 1 = PM.
+Write: Set TOD or alarm time.
+
+$DD0C  
+Serial shift register. (Bits are read and written upon every positive edge of the CNT pin.)
+
+$DD0D  
+Interrupt control and status register.
+Read bits:
+*   Bit #0: 1 = Timer A underflow occurred.
+*   Bit #1: 1 = Timer B underflow occurred.
+*   Bit #2: 1 = TOD is equal to alarm time.
+*   Bit #3: 1 = A complete byte has been received into or sent from serial shift register.
+*   Bit #4: Signal level on FLAG pin.
+*   Bit #7: A non-maskable interrupt has been generated.
+Write bits:
+*   Bit #0: 1 = Enable non-maskable interrupts generated by timer A underflow.
+*   Bit #1: 1 = Enable non-maskable interrupts generated by timer B underflow.
+*   Bit #2: 1 = Enable TOD alarm non-maskable interrupt.
+*   Bit #3: 1 = Enable non-maskable interrupts generated by a byte having been received/sent via serial shift register.
+*   Bit #4: 1 = Enable non-maskable interrupts generated by positive edge on FLAG pin.
+*   Bit #7: Fill bit; bits #0-#6, that are set to 1, get their values from this bit; bits #0-#6, that are set to 0, are left unchanged.
+
+$DD0E  
+Timer A control register. Bits:
+*   Bit #0: 0 = Stop timer; 1 = Start timer.
+*   Bit #1: 1 = Indicate timer underflow on port B bit #6.
+*   Bit #2: 0 = Upon timer underflow, invert port B bit #6; 1 = upon timer underflow, generate a positive edge on port B bit #6 for 1 system cycle.
+*   Bit #3: 0 = Timer restarts upon underflow; 1 = Timer stops upon underflow.
+*   Bit #4: 1 = Load start value into timer.
+*   Bit #5: 0 = Timer counts system cycles; 1 = Timer counts positive edges on CNT pin.
+*   Bit #6: Serial shift register direction; 0 = Input, read; 1 = Output, write.
+*   Bit #7: TOD speed; 0 = 60 Hz; 1 = 50 Hz.
+
+$DD0F  
+Timer B control register. Bits:
+*   Bit #0: 0 = Stop timer; 1 = Start timer.
+*   Bit #1: 1 = Indicate timer underflow on port B bit #7.
+*   Bit #2: 0 = Upon timer underflow, invert port B bit #7; 1 = upon timer underflow, generate a positive edge on port B bit #7 for 1 system cycle.
+*   Bit #3: 0 = Timer restarts upon underflow; 1 = Timer stops upon underflow.
+*   Bit #4: 1 = Load start value into timer.
+*   Bits #5-#6: %00 = Timer counts system cycles; %01 = Timer counts positive edges on CNT pin; %10 = Timer counts underflows of timer A; %11 = Timer counts underflows of timer A occurring along with a positive edge on CNT pin.
+*   Bit #7: 0 = Writing into TOD registers sets TOD; 1 = Writing into TOD registers sets alarm time.
+
+$DD10-$DDFF  
+CIA#2 register images (repeated every $10, 16 bytes).
+
+$DE00-$DEFF  
+I/O Area #1, memory mapped registers or machine code routines of optional external devices (256 bytes). Layout and contents depend on the actual device.
+
+$DF00-$DFFF  
+I/O Area #2, memory mapped registers or machine code routines of optional external devices (256 bytes). Layout and contents depend on the actual device.
+
+$E000-$FFFF
+KERNAL ROM
+
+$E000-$FFFF  
+KERNAL ROM or RAM area (8192 bytes); depends on the value of bits #0-#2 of the processor port at memory address $0001:
+*   %x0x: RAM area.
+*   %x1x: KERNAL ROM.
+
+$FFFA-$FFFF, 65530-65535  
+Hardware vectors
+
+$FFFA-$FFFB  
+Execution address of non-maskable interrupt service routine.  
+Default: $FE43.
+
+$FFFC-$FFFD  
+Execution address of cold reset.  
+Default: $FCE2.
+
+$FFFE-$FFFF  
+Execution address of interrupt service routine.  
+Default: $FF48.
+
+KERNAL
+------
+$E000 EXP continued From BASIC ROM
+$E043 Series Evaluation
+$E08D Constants for RND
+$E097 Evaluate <rnd>
+$E0F9 Handle I/O Error in BASIC
+$E10C Output Character
+$E112 Input Character
+$E118 Set Up For Output
+$E11E Set Up For Input
+$E124 Get One Character
+$E12A Perform [sys]
+$E156 Perform [save]
+$E165 Perform [verify]
+$E168 Perform [load]
+$E1BE Perform [open]
+$E1C7 Perform [close]
+$E1D4 Get Parameters For LOAD/SAVE
+$E200 Get Next One Byte Parameter
+$E206 Check Default Parameters
+$E20E Check For Comma
+$E219 Get Parameters For OPEN/CLOSE
+$E264 Evaluate <cos>
+$E26B Evaluate <sin>
+$E2B4 Evaluate <tan>
+$E2E0 Table of Trig Constants   1.570796327
+$E2E5 Table of Trig Constants   6.28318531
+$E2EA Table of Trig Constants   0.25
+$E2EF Table of Trig Constants   #05
+$E2F0 Table of Trig Constants   -14.3813907
+$E2F5 Table of Trig Constants   42.0077971
+$E2FA Table of Trig Constants   -76.7041703
+$E2FF Table of Trig Constants   81.6052237
+$E304 Table of Trig Constants   -41.3417021
+$E309 Table of Trig Constants   6.28318531
+$E30E Evaluate <atn>
+$E33E Table of ATN Constants   #0b
+$E33F Table of ATN Constants   -0.00068479391
+$E344 Table of ATN Constants   0.00485094216
+$E349 Table of ATN Constants   -0.161117018
+$E34E Table of ATN Constants   0.034209638
+$E353 Table of ATN Constants   -0.0542791328
+$E358 Table of ATN Constants   0.0724571965
+$E35D Table of ATN Constants   -0.0898023954
+$E362 Table of ATN Constants   0.110932413
+$E367 Table of ATN Constants   -0.142839808
+$E36C Table of ATN Constants   0.19999912
+$E371 Table of ATN Constants   -0.333333316
+$E376 Table of ATN Constants   1.00
+$E37B BASIC Warm Start [RUNSTOP-RESTORE]
+$E394 BASIC Cold Start
+$E3A2 CHRGET For Zero-page
+$E3BA RND Seed For zero-page
+$E3BF Initialize BASIC RAM
+$E422 Output Power-Up Message
+$E447 Table of BASIC Vectors (for 0300)
+$E453 Initialize Vectors
+$E45F Power-Up Message
+$E4AC Version Indicator(?)
+$E4AD Patch for BASIC Call to CHKOUT
+$E4B7 Unused Bytes For Future Patches
+$E4D3 Patch for RS232-Routines
+$E4DA Reset Character Color
+$E4E0 Pause After Finding Tape File
+$E4EC RS232 Timing Table -- PAL
+$E500 Get I/O Address
+$E505 Get Screen Size
+$E50A Put / Get Row And Column
+$E518 Initialize I/O
+$E544 Clear Screen
+$E566 Home Cursor
+$E56C Set Screen Pointers
+$E59A Set I/O Defaults (Unused Entry)
+$E5A0 Set I/O Defaults
+$E5B4 Get Character From Keyboard Buffer
+$E5CA Input From Keyboard
+$E632 Input From Screen or Keyboard
+$E684 Quotes Test
+$E691 Set Up Screen Print
+$E6B6 Advance Cursor
+$E6ED Retreat Cursor
+$E701 Back on to Previous Line
+$E716 Output to Screen
+$E72A -unshifted characters-
+$E7D4 -shifted characters-
+$E87C Go to Next Line
+$E891 Output <CR>
+$E8A1 Check Line Decrement
+$E8B3 Check Line Increment
+$E8CB Set Color Code
+$E8DA Color Code Table
+$E8EA Scroll Screen
+$E965 Open A Space On The Screen
+$E9C8 Move A Screen Line
+$E9E0 Syncronise Color Transfer
+$E9F0 Set Start of Line
+$E9FF Clear Screen Line
+$EA13 Print To Screen
+$EA24 Syncronise Color Pointer
+$EA31 Main IRQ Entry Point
+$EA81 Restore A/X/Y and End IRQ
+$EA87 Scan Keyboard
+$EADD Process Key Image
+$EB48 Check for Shift, CTRL, C=
+$EB79 Pointers to Keyboard decoding tables
+$EB81 Keyboard 1 -- Unshifted
+$EBC2 Keyboard 2 -- Shifted
+$EC03 Keyboard 3 -- Commodore
+$EC44 Graphics/Text Control
+$EC78 Keyboard 4 -- Control
+$ECB9 Video Chip Setup Table
+$ECE7 Shift-Run Equivalent
+$ECF0 Low Byte Screen Line Addresses
+$ED09 Send TALK Command on Serial Bus
+$ED0C Send LISTEN Command on Serial Bus
+$ED40 Send Data On Serial Bus
+$EDAD Flag Errors: Status #80 - DEVICE NOT PRESENT
+$EDB0 Flag Errors: Status #03 - WRITE TIMEOUT
+$EDB9 Send LISTEN Secondary Address
+$EDBE Clear ATN
+$EDC7 Send TALK Secondary Address
+$EDCC Wait For Clock
+$EDDD Send Serial Deferred
+$EDEF Send UNTALK
+$EDFE Send UNLISTEN
+$EE13 Receive From Serial Bus
+$EE85 Serial Clock On
+$EE8E Serial Clock Off
+$EE97 Serial Output 1
+$EEA0 Serial Output 0
+$EEA9 Get Serial Data And Clock In
+$EEB3 Delay 1 ms
+$EEBB RS232 Send
+$EF06 Send New RS232 Byte
+$EF2E 'No DSR' / 'No CTS' Error
+$EF39 Disable Timer
+$EF4A Compute Bit Count
+$EF59 RS232 Receive
+$EF7E Set Up To Receive
+$EF90 Process RS232 Byte
+$EFE1 Submit to RS232
+$F00D No DSR (Data Set Ready) Error
+$F017 Send to RS232 Buffer
+$F04D Input From RS232
+$F086 Get From RS232
+$F0A4 Serial Bus Idle
+$F0BD Table of Kernal I/O Messages
+$F12B Print Message if Direct
+$F12F Print Message
+$F13E Get a byte
+$F157 Input a byte
+$F199 Get From Tape / Serial / RS232
+$F1CA Output One Character
+$F20E Set Input Device
+$F250 Set Output Device
+$F291 Close File
+$F30F Find File
+$F31F Set File values
+$F32F Abort All Files
+$F333 Restore Default I/O
+$F34A Open File
+$F3D5 Send Secondary Address
+$F409 Open RS232
+$F49E Load RAM
+$F4B8 Load File From Serial Bus
+$F533 Load File From Tape
+$F5AF Print "SEARCHING"
+$F5C1 Print Filename
+$F5D2 Print "LOADING / VERIFYING"
+$F5DD Save RAM
+$F5FA Save to Serial Bus
+$F659 Save to Tape
+$F68F Print "SAVING"
+$F69B Bump Clock
+$F6DD Get Time
+$F6E4 Set Time
+$F6ED Check STOP Key
+$F6FB Output I/O Error Messages: 'TOO MANY FILES'
+$F6FE Output I/O Error Messages: 'FILE OPEN'
+$F701 Output I/O Error Messages: 'FILE NOT OPEN'
+$F704 Output I/O Error Messages: 'FILE NOT FOUND'
+$F707 Output I/O Error Messages: 'DEVICE NOT PRESENT'
+$F70A Output I/O Error Messages: 'NOT INPUT FILE'
+$F70D Output I/O Error Messages: 'NOT OUTPUT FILE'
+$F710 Output I/O Error Messages: 'MISSING FILENAME'
+$F713 Output I/O Error Messages: 'ILLEGAL DEVICE NUMBER'
+$F72C Find Any Tape Header
+$F76A Write Tape Header
+$F7D0 Get Buffer Address
+$F7D7 Set Buffer Stat / End Pointers
+$F7EA Find Specific Tape Header
+$F80D Bump Tape Pointer
+$F817 Print "PRESS PLAY ON TAPE"
+$F82E Check Tape Status
+$F838 Print "PRESS RECORD..."
+$F841 Initiate Tape Read
+$F864 Initiate Tape Write
+$F875 Common Tape Code
+$F8D0 Check Tape Stop
+$F8E2 Set Read Timing
+$F92C Read Tape Bits
+$FA60 Store Tape Characters
+$FB8E Reset Tape Pointer
+$FB97 New Character Setup
+$FBA6 Send Tone to Tape
+$FBC8 Write Data to Tape
+$FBCD IRQ Entry Point
+$FC57 Write Tape Leader
+$FC93 Restore Normal IRQ
+$FCB8 Set IRQ Vector
+$FCCA Stop Tape Motor
+$FCD1 Check Read / Write Pointer
+$FCDB Bump Read / Write Pointer
+$FCE2 Power-Up RESET Entry
+$FD02 Check For 8-ROM
+$FD10 8-ROM Mask 'CBM80'
+$FD15 Restore Kernal Vectors
+$FD1A Change Vectors For User
+$FD30 Kernal Reset Vectors
+$FD50 Initialise System Constants
+$FD9B IRQ Vectors For Tape I/O
+$FDA3 Initialise I/O
+$FDDD Enable Timer
+$FDF9 Set Filename
+$FE00 Set Logical File Parameters
+$FE07 Get I/O Status Word
+$FE18 Control OS Messages
+$FE21 Set IEEE Timeout
+$FE25 Read / Set Top of Memory
+$FE34 Read / Set Bottom of Memory
+$FE43 NMI Transfer Entry
+$FE66 Warm Start Basic
+$FEBC Exit Interrupt
+$FEC2 RS232 Timing Table - NTSC
+$FED6 NMI RS232 In
+$FF07 NMI RS232 Out
+$FF43 Fake IRQ Entry
+$FF48 IRQ Entry
+$FF5B Initialize screen editor
+$FF80 Kernal Version Number
+$FF81 Init Editor & Video Chips
+$FF84 Init I/O Devices, Ports & Timers
+$FF87 Init Ram & Buffers
+$FF8A Restore Vectors
+$FF8D Change Vectors For User
+$FF90 Control OS Messages
+$FF93 Send SA After Listen
+$FF96 Send SA After Talk
+$FF99 Set/Read System RAM Top
+$FF9C Set/Read System RAM Bottom
+$FF9F Scan Keyboard
+$FFA2 Set Timeout In IEEE
+$FFA5 Handshake Serial Byte In
+$FFA8 Handshake Serial Byte Out
+$FFAB Command Serial Bus UNTALK
+$FFAE Command Serial Bus UNLISTEN
+$FFB1 Command Serial Bus LISTEN
+$FFB4 Command Serial Bus TALK
+$FFB7 Read I/O Status Word
+$FFBA Set Logical File Parameters
+$FFBD Set Filename
+$FFC0 Open Vector
+$FFC3 Close Vector
+$FFC6 Set Input
+$FFC9 Set Output
+$FFCC Restore I/O Vector
+$FFCF Input Vector, chrin
+$FFD2 Output Vector, chrout
+$FFD5 Load RAM From Device
+$FFD8 Save RAM To Device
+$FFDB Set Real-Time Clock
+$FFDE Read Real-Time Clock
+$FFE1 Test-Stop Vector
+$FFE4 Get From Keyboad
+$FFE7 Close All Channels And Files
+$FFEA Increment Real-Time Clock
+$FFED Return Screen Organization
+$FFF0 Read / Set Cursor X/Y Position
+$FFF3 Return I/O Base Address
+$FFF6 -
+$FFF8 SYSTEM
+$FFFA Vector: NMI
+$FFFC Vector: RESET
+$FFFE Vector: IRQ
